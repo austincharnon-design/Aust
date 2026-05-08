@@ -55,11 +55,15 @@ end
 
 local function resolveTargets()
 	local t = {}
-	if selectedTargetMode == "me" then table.insert(t, me)
-	elseif selectedTargetMode == "all" then for _,p in ipairs(Players:GetPlayers()) do table.insert(t,p) end
-	elseif selectedTargetMode == "others" then for _,p in ipairs(Players:GetPlayers()) do if p~=me then table.insert(t,p) end end
+	if selectedTargetMode == "me" then
+		table.insert(t, me)
+	elseif selectedTargetMode == "all" then
+		for _,p in ipairs(Players:GetPlayers()) do table.insert(t,p) end
+	elseif selectedTargetMode == "others" then
+		for _,p in ipairs(Players:GetPlayers()) do if p~=me then table.insert(t,p) end end
 	elseif selectedTargetMode == "random" then
-		local l = Players:GetPlayers() if #l>0 then table.insert(t, l[math.random(1,#l)]) end
+		local l = Players:GetPlayers()
+		if #l>0 then table.insert(t, l[math.random(1,#l)]) end
 	elseif selectedTargetMode == "named" then
 		local seen = {}
 		for _, part in ipairs(string.split(namedTargetText, ",")) do
@@ -70,7 +74,10 @@ local function resolveTargets()
 					local s = matchesName(p, part)
 					if s > best then best, bestP = s, p end
 				end
-				if bestP and not seen[bestP] then seen[bestP]=true table.insert(t,bestP) end
+				if bestP and not seen[bestP] then
+					seen[bestP] = true
+					table.insert(t, bestP)
+				end
 			end
 		end
 	end
@@ -87,6 +94,7 @@ end
 -- command impls
 ------------------------------------------------------------
 local loopBring, followConn = {}, nil
+
 local function cmdKick(ts, r) for _,t in ipairs(ts) do t:Kick(r~="" and r or "Kicked by admin.") end end
 local function cmdRespawn(ts) for _,t in ipairs(ts) do t:LoadCharacter() end end
 local function cmdRefresh(ts)
@@ -190,11 +198,11 @@ local function cmdTeam(ts,n) local team for _,v in ipairs(Teams:GetChildren()) d
 local function cmdChat(msg) local h=Instance.new("Message") h.Text=(me.Name or "Admin")..": "..(msg or "") h.Parent=Workspace task.delay(4,function() h:Destroy() end) end
 
 ------------------------------------------------------------
--- fly/noclip clients
+-- fly/noclip clients (targetable)
 ------------------------------------------------------------
-local function ensureFlag(name)
-	local f = me:FindFirstChild(name)
-	if not f then f = Instance.new("BoolValue") f.Name=name f.Parent=me end
+local function ensureFlagFor(plr, name)
+	local f = plr:FindFirstChild(name)
+	if not f then f = Instance.new("BoolValue") f.Name=name f.Parent=plr end
 	return f
 end
 
@@ -221,16 +229,42 @@ flag:GetPropertyChangedSignal("Value"):Connect(function() if flag.Value then sta
 if flag.Value then start() end
 ]]
 
-local function installLocal(name, src)
-	local pg = me:FindFirstChildOfClass("PlayerGui") if not pg then return end
-	local ex = pg:FindFirstChild(name) if ex then ex:Destroy() end
-	local ls = Instance.new("LocalScript") ls.Name=name ls.Source=src ls.Parent=pg
+local function installLocalFor(plr, name, src)
+	local pg = plr:FindFirstChildOfClass("PlayerGui")
+	if not pg then return end
+	local ex = pg:FindFirstChild(name)
+	if ex then ex:Destroy() end
+	local ls = Instance.new("LocalScript")
+	ls.Name = name
+	ls.Source = src
+	ls.Parent = pg
 end
 
-local function startFlySelf() ensureFlag("AustAdminFlyState").Value=true installLocal("AustAdminFlyClient", flyClientSource) end
-local function stopFlySelf() ensureFlag("AustAdminFlyState").Value=false end
-local function startNoclip() ensureFlag("AustAdminNoclipState").Value=true installLocal("AustAdminNoclipClient", noclipSource) end
-local function stopNoclip() ensureFlag("AustAdminNoclipState").Value=false end
+local function startFly(ts)
+	for _,plr in ipairs(ts) do
+		ensureFlagFor(plr, "AustAdminFlyState").Value = true
+		installLocalFor(plr, "AustAdminFlyClient", flyClientSource)
+	end
+end
+
+local function stopFly(ts)
+	for _,plr in ipairs(ts) do
+		ensureFlagFor(plr, "AustAdminFlyState").Value = false
+	end
+end
+
+local function startNoclipFor(ts)
+	for _,plr in ipairs(ts) do
+		ensureFlagFor(plr, "AustAdminNoclipState").Value = true
+		installLocalFor(plr, "AustAdminNoclipClient", noclipSource)
+	end
+end
+
+local function stopNoclipFor(ts)
+	for _,plr in ipairs(ts) do
+		ensureFlagFor(plr, "AustAdminNoclipState").Value = false
+	end
+end
 
 ------------------------------------------------------------
 -- Actions registry
@@ -270,13 +304,7 @@ local Actions = {
 	RoadRogue     = function(p) require(7473216460).load(p.Name) end,
 	PinkCar       = function(p) require(4745872847).load(p.Name) end,
 	Bulldozer     = function(p) require(11102724246).load(p.Name) end,
-		WindowsPC     = function(p) require(5083134281)(p.Name) end,
-
-	-- Tool giver via require(70949003633154):SimpleToolGiver(name)
-	ToolGiver = function(p)
-		local plr = p or game:GetService("Players"):GetPlayers()[1]
-		require(70949003633154):SimpleToolGiver(plr.Name)
-	end,
+	WindowsPC     = function(p) require(5083134281)(p.Name) end,
 }
 
 ------------------------------------------------------------
@@ -310,7 +338,6 @@ main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
 local mStroke = Instance.new("UIStroke", main) mStroke.Color = C.border mStroke.Thickness = 1
 
--- title bar
 local bar = Instance.new("Frame")
 bar.Size = UDim2.new(1, 0, 0, 44)
 bar.BackgroundColor3 = C.surface
@@ -321,7 +348,6 @@ local barClip = Instance.new("Frame")
 barClip.Size = UDim2.new(1,0,0,12) barClip.Position = UDim2.new(0,0,1,-12)
 barClip.BackgroundColor3 = C.surface barClip.BorderSizePixel = 0 barClip.Parent = bar
 
--- AA badge (replaces the dot)
 local badge = Instance.new("Frame")
 badge.Name = "AABadge"
 badge.Size = UDim2.new(0, 30, 0, 24)
@@ -452,17 +478,43 @@ local function styleButton(b, accent)
 	local s = Instance.new("UIStroke", b) s.Color = C.border s.Thickness = 1 s.Transparency = 0.4
 end
 
-local function makeActionButton(parent, label, actionName)
+local function makeActionButton(parent, label, actionName, useTargets)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(1, 0, 0, 34)
-	b.Text = label b.Parent = parent
+	b.Text = label
+	b.Parent = parent
 	styleButton(b)
+
 	b.MouseButton1Click:Connect(function()
-		local fn = Actions[actionName] if not fn then warn("Unknown action "..actionName) return end
+		local fn = Actions[actionName]
+		if not fn then
+			warn("Unknown action "..actionName)
+			return
+		end
+
 		task.spawn(function()
-			local ok,err = pcall(fn, me)
-			if not ok then warn("[AustAdmin] '"..actionName.."' failed:",err)
-			else print("[AustAdmin] '"..actionName.."' ran OK") end
+			if useTargets then
+				local ts = resolveTargets()
+				if #ts == 0 then
+					warn("[AustAdmin] no targets")
+					return
+				end
+				for _, t in ipairs(ts) do
+					local ok, err = pcall(fn, t)
+					if not ok then
+						warn("[AustAdmin] '"..actionName.."' on "..t.Name.." failed:", err)
+					else
+						print("[AustAdmin] '"..actionName.."' ran on "..t.Name)
+					end
+				end
+			else
+				local ok, err = pcall(fn, me)
+				if not ok then
+					warn("[AustAdmin] '"..actionName.."' failed:", err)
+				else
+					print("[AustAdmin] '"..actionName.."' ran OK")
+				end
+			end
 		end)
 	end)
 end
@@ -520,44 +572,54 @@ local function promptNamedTarget()
 	prompt("Enter target name(s) (comma-separated)", "e.g. Ben,Alice", function(val)
 		namedTargetText = val or ""
 		selectedTargetMode = "named"
+		if refreshTarget then refreshTarget() end
 	end)
 end
 
 -- tabs
 local morphsPage = makeTab("Morphs")
 local vehiclesPage = makeTab("Vehicles")
-local toolsPage = makeTab("Tools")
 local scriptsPage = makeTab("Scripts")
 local cmdPage = makeTab("Commands")
 local morePage = makeTab("More")
 
+local morphTargetLabel = Instance.new("TextLabel")
+morphTargetLabel.Size = UDim2.new(1, 0, 0, 22)
+morphTargetLabel.BackgroundTransparency = 1
+morphTargetLabel.Text = "Target: me  (change in Commands tab)"
+morphTargetLabel.Font = Enum.Font.GothamBold
+morphTargetLabel.TextSize = 12
+morphTargetLabel.TextColor3 = C.textDim
+morphTargetLabel.TextXAlignment = Enum.TextXAlignment.Left
+morphTargetLabel.Parent = morphsPage
+
 -- Morphs
-makeActionButton(morphsPage, "White Monster (Guilt)", "WhiteMonster")
-makeActionButton(morphsPage, "Island Guy", "IslandGuy")
-makeActionButton(morphsPage, "Goner", "Goner")
-makeActionButton(morphsPage, "Doomguy", "Doomguy")
-makeActionButton(morphsPage, "Gojo (Sorcerer)", "Gojo")
-makeActionButton(morphsPage, "All-Seeing Hand", "AllSeeingHand")
-makeActionButton(morphsPage, "Ironman Suitcase", "IronmanSuit")
-makeActionButton(morphsPage, "Tea", "Tea")
-makeActionButton(morphsPage, "Hallow Slayer", "HallowSlayer")
-makeActionButton(morphsPage, "Omega", "Omega")
-makeActionButton(morphsPage, "Fists", "Fists")
-makeActionButton(morphsPage, "Magician", "Magician")
-makeActionButton(morphsPage, "Star Glitcher", "StarGlitcher")
-makeActionButton(morphsPage, "Server Admin", "ServerAdmin")
-makeActionButton(morphsPage, "Frying Pan", "FryingPan")
-makeActionButton(morphsPage, "Cube Buster", "CubeBuster")
-makeActionButton(morphsPage, "Soul Reaper", "SoulReaper")
-makeActionButton(morphsPage, "Chainsaw", "Chainsaw")
+makeActionButton(morphsPage, "White Monster (Guilt)", "WhiteMonster", true)
+makeActionButton(morphsPage, "Island Guy", "IslandGuy", true)
+makeActionButton(morphsPage, "Goner", "Goner", true)
+makeActionButton(morphsPage, "Doomguy", "Doomguy", true)
+makeActionButton(morphsPage, "Gojo (Sorcerer)", "Gojo", true)
+makeActionButton(morphsPage, "All-Seeing Hand", "AllSeeingHand", true)
+makeActionButton(morphsPage, "Ironman Suitcase", "IronmanSuit", true)
+makeActionButton(morphsPage, "Tea", "Tea", true)
+makeActionButton(morphsPage, "Hallow Slayer", "HallowSlayer", true)
+makeActionButton(morphsPage, "Omega", "Omega", true)
+makeActionButton(morphsPage, "Fists", "Fists", true)
+makeActionButton(morphsPage, "Magician", "Magician", true)
+makeActionButton(morphsPage, "Star Glitcher", "StarGlitcher", true)
+makeActionButton(morphsPage, "Server Admin", "ServerAdmin", true)
+makeActionButton(morphsPage, "Frying Pan", "FryingPan", true)
+makeActionButton(morphsPage, "Cube Buster", "CubeBuster", true)
+makeActionButton(morphsPage, "Soul Reaper", "SoulReaper", true)
+makeActionButton(morphsPage, "Chainsaw", "Chainsaw", true)
 
 -- Vehicles
-makeActionButton(vehiclesPage, "Helicopter (Huey)", "Helicopter")
-makeActionButton(vehiclesPage, "Voltbike", "Voltbike")
-makeActionButton(vehiclesPage, "Road Rogue Motorbike", "RoadRogue")
-makeActionButton(vehiclesPage, "Pink Car", "PinkCar")
-makeActionButton(vehiclesPage, "Bulldozer", "Bulldozer")
-makeActionButton(vehiclesPage, "Windows PC", "WindowsPC")
+makeActionButton(vehiclesPage, "Helicopter (Huey)", "Helicopter", true)
+makeActionButton(vehiclesPage, "Voltbike", "Voltbike", true)
+makeActionButton(vehiclesPage, "Road Rogue Motorbike", "RoadRogue", true)
+makeActionButton(vehiclesPage, "Pink Car", "PinkCar", true)
+makeActionButton(vehiclesPage, "Bulldozer", "Bulldozer", true)
+makeActionButton(vehiclesPage, "Windows PC", "WindowsPC", true)
 
 -- Scripts
 makeActionButton(scriptsPage, "Serverside Dex", "Dex")
@@ -574,6 +636,19 @@ targetLabel.TextXAlignment = Enum.TextXAlignment.Left
 targetLabel.TextColor3 = C.text
 targetLabel.Parent = cmdPage
 
+function refreshTarget()
+	local txt
+	if selectedTargetMode == "named" then
+		txt = "Target: named ("..namedTargetText..")"
+	else
+		txt = "Target: "..selectedTargetMode
+	end
+	targetLabel.Text = txt
+	if morphTargetLabel then
+		morphTargetLabel.Text = txt.."  (change in Commands tab)"
+	end
+end
+
 local trRow = Instance.new("Frame")
 trRow.Size = UDim2.new(1, 0, 0, 32)
 trRow.BackgroundTransparency = 1
@@ -582,21 +657,27 @@ local trLayout = Instance.new("UIListLayout", trRow)
 trLayout.FillDirection = Enum.FillDirection.Horizontal
 trLayout.Padding = UDim.new(0, 6)
 
-local function refreshTarget()
-	if selectedTargetMode == "named" then targetLabel.Text = "Target: named ("..namedTargetText..")"
-	else targetLabel.Text = "Target: "..selectedTargetMode end
-end
 local function makeTargetBtn(label, mode)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(0, 80, 1, 0)
 	b.Text = label b.Parent = trRow
 	styleButton(b)
 	b.MouseButton1Click:Connect(function()
-		if mode == "named" then promptNamedTarget() task.wait() refreshTarget()
-		else selectedTargetMode = mode refreshTarget() end
+		if mode == "named" then
+			promptNamedTarget()
+			task.wait()
+			refreshTarget()
+		else
+			selectedTargetMode = mode
+			refreshTarget()
+		end
 	end)
 end
-makeTargetBtn("Me","me") makeTargetBtn("All","all") makeTargetBtn("Others","others") makeTargetBtn("Random","random") makeTargetBtn("Named…","named")
+makeTargetBtn("Me","me")
+makeTargetBtn("All","all")
+makeTargetBtn("Others","others")
+makeTargetBtn("Random","random")
+makeTargetBtn("Named…","named")
 
 local function rowAdder(parent)
 	local cur, left = nil, 0
@@ -651,10 +732,10 @@ addCmd("Stun", function() cmdStun(resolveTargets()) end)
 addCmd("Unstun", function() cmdUnstun(resolveTargets()) end)
 addCmd("Invisible", function() cmdInvisible(resolveTargets(),false) end)
 addCmd("Visible", function() cmdInvisible(resolveTargets(),true) end)
-addCmd("Fly (me)", function() startFlySelf() end)
-addCmd("Unfly (me)", function() stopFlySelf() end)
-addCmd("Noclip (me)", function() startNoclip() end)
-addCmd("Clip (me)", function() stopNoclip() end)
+addCmd("Fly", function() startFly(resolveTargets()) end)
+addCmd("Unfly", function() stopFly(resolveTargets()) end)
+addCmd("Noclip", function() startNoclipFor(resolveTargets()) end)
+addCmd("Clip", function() stopNoclipFor(resolveTargets()) end)
 addCmd("R6", function() cmdR6(resolveTargets()) end)
 addCmd("Btools", function() cmdBtools(resolveTargets()) end)
 addCmd("Tools (copy)", function() cmdTools(resolveTargets()) end)
@@ -689,6 +770,7 @@ addMore("Noclip WS", function() cmdNoClipWS() end)
 addMore("Remove Terrain", function() cmdRemoveTerrain() end)
 addMore("Shutdown", function() prompt("Type YES","YES",function(v) if v=="YES" then cmdShutdown() end end) end)
 
+refreshTarget()
 setActive(pages[1])
 
 close.MouseButton1Click:Connect(function() main.Visible = not main.Visible shadow.Visible = main.Visible end)
@@ -714,7 +796,8 @@ end
 
 if close and close.Parent then close:Destroy() end
 
-local oldPill = gui:FindFirstChild("ToggleBtn") if oldPill then oldPill:Destroy() end
+local oldPill = gui:FindFirstChild("ToggleBtn")
+if oldPill then oldPill:Destroy() end
 
 local pill = Instance.new("TextButton")
 pill.Name = "ToggleBtn"
@@ -734,7 +817,6 @@ local ps = Instance.new("UIStroke", pill) ps.Color = C.border ps.Thickness = 1
 
 pill.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
 
--- Real keybind via RemoteEvent
 local remote = ReplicatedStorage:FindFirstChild("AustAdminToggle")
 if remote then remote:Destroy() end
 remote = Instance.new("RemoteEvent")
@@ -766,4 +848,4 @@ print("[AustAdmin] keybind ready (Pill Bottom Left)")
 ]]
 kb.Parent = gui
 
-print("[AustAdmin] ready — AA badge, Time Stop tool added, keybind F4/RightCtrl")
+print("[AustAdmin] ready — AA badge, tools tab removed, targetable morphs/commands enabled")
