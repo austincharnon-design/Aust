@@ -1,0 +1,761 @@
+-- SimpleAdmin (SB / owner-style) — full
+print("[SimpleAdmin] script starting...")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local ServerStorage = game:GetService("ServerStorage")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local Teams = game:GetService("Teams")
+
+local me = owner
+assert(me, "This script expects to run in an SB/owner environment.")
+print("[SimpleAdmin] Running for:", me.Name, me.UserId)
+
+pcall(function()
+	for _,n in ipairs({"SimpleAdminGui","SimpleAdminFlyClient","SimpleAdminNoclipClient","SimpleAdminKeybind"}) do
+		local x = me.PlayerGui:FindFirstChild(n) if x then x:Destroy() end
+	end
+end)
+
+------------------------------------------------------------
+-- palette (modern dark)
+------------------------------------------------------------
+local C = {
+	bg       = Color3.fromRGB(18,18,22),
+	surface  = Color3.fromRGB(26,26,32),
+	surface2 = Color3.fromRGB(34,34,42),
+	surface3 = Color3.fromRGB(44,44,54),
+	border   = Color3.fromRGB(60,60,72),
+	text     = Color3.fromRGB(236,236,240),
+	textDim  = Color3.fromRGB(160,160,172),
+	accent   = Color3.fromRGB(120,140,255),
+	accent2  = Color3.fromRGB(90,110,235),
+	danger   = Color3.fromRGB(230,80,96),
+}
+
+------------------------------------------------------------
+-- target selection
+------------------------------------------------------------
+local selectedTargetMode = "me"
+local namedTargetText = ""
+
+local function matchesName(p, q)
+	q = string.lower(q)
+	local n, d = string.lower(p.Name), string.lower(p.DisplayName)
+	if n == q or d == q then return 3 end
+	if string.sub(n,1,#q)==q or string.sub(d,1,#q)==q then return 2 end
+	if string.find(n,q,1,true) or string.find(d,q,1,true) then return 1 end
+	return 0
+end
+
+local function resolveTargets()
+	local t = {}
+	if selectedTargetMode == "me" then table.insert(t, me)
+	elseif selectedTargetMode == "all" then for _,p in ipairs(Players:GetPlayers()) do table.insert(t,p) end
+	elseif selectedTargetMode == "others" then for _,p in ipairs(Players:GetPlayers()) do if p~=me then table.insert(t,p) end end
+	elseif selectedTargetMode == "random" then
+		local l = Players:GetPlayers() if #l>0 then table.insert(t, l[math.random(1,#l)]) end
+	elseif selectedTargetMode == "named" then
+		local seen = {}
+		for _, part in ipairs(string.split(namedTargetText, ",")) do
+			part = part:gsub("^%s+",""):gsub("%s+$","")
+			if part ~= "" then
+				local best, bestP = 0, nil
+				for _, p in ipairs(Players:GetPlayers()) do
+					local s = matchesName(p, part)
+					if s > best then best, bestP = s, p end
+				end
+				if bestP and not seen[bestP] then seen[bestP]=true table.insert(t,bestP) end
+			end
+		end
+	end
+	return t
+end
+
+local function getCh(p)
+	local c = p.Character
+	if not c then return nil, nil, nil end
+	return c, c:FindFirstChildOfClass("Humanoid"), c:FindFirstChild("HumanoidRootPart")
+end
+
+------------------------------------------------------------
+-- command impls (trimmed comments)
+------------------------------------------------------------
+local loopBring, followConn = {}, nil
+
+local function cmdKick(ts, r) for _,t in ipairs(ts) do t:Kick(r~="" and r or "Kicked by admin.") end end
+local function cmdRespawn(ts) for _,t in ipairs(ts) do t:LoadCharacter() end end
+local function cmdRefresh(ts)
+	for _,t in ipairs(ts) do
+		local _,_,r = getCh(t) local cf = r and r.CFrame
+		t:LoadCharacter()
+		if cf then task.delay(0.3, function() local _,_,nr=getCh(t) if nr then nr.CFrame=cf end end) end
+	end
+end
+local function cmdFreeze(ts) for _,t in ipairs(ts) do local c=t.Character if c then for _,x in ipairs(c:GetDescendants()) do if x:IsA("BasePart") then x.Anchored=true end end end end end
+local function cmdThaw(ts)   for _,t in ipairs(ts) do local c=t.Character if c then for _,x in ipairs(c:GetDescendants()) do if x:IsA("BasePart") then x.Anchored=false end end end end end
+local function cmdGod(ts)   for _,t in ipairs(ts) do local _,h=getCh(t) if h then h.MaxHealth=math.huge h.Health=math.huge end end end
+local function cmdUngod(ts) for _,t in ipairs(ts) do local _,h=getCh(t) if h then h.MaxHealth=100 h.Health=100 end end end
+local function cmdKill(ts)  for _,t in ipairs(ts) do local _,h=getCh(t) if h then h.Health=0 end end end
+local function cmdSpeed(ts,v) local n=tonumber(v) or 16 for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.WalkSpeed=n end end end
+local function cmdJump(ts,v) local n=tonumber(v) or 50 for _,p in ipairs(ts) do local _,h=getCh(p) if h then if h.UseJumpPower then h.JumpPower=n else h.JumpHeight=n end end end end
+local function cmdHealth(ts,v) local n=tonumber(v) or 100 for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.MaxHealth=n h.Health=n end end end
+local function cmdHipHeight(ts,v) local n=tonumber(v) or 2 for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.HipHeight=n end end end
+local function cmdSit(ts) for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.Sit=true end end end
+local function cmdJumpCmd(ts) for _,p in ipairs(ts) do local _,h=getCh(p) if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end end
+local function cmdStun(ts) for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.PlatformStand=true end end end
+local function cmdUnstun(ts) for _,p in ipairs(ts) do local _,h=getCh(p) if h then h.PlatformStand=false end end end
+local function cmdAnchor(ts) for _,p in ipairs(ts) do local _,_,r=getCh(p) if r then r.Anchored=true end end end
+local function cmdUnanchor(ts) for _,p in ipairs(ts) do local _,_,r=getCh(p) if r then r.Anchored=false end end end
+local function cmdExplode(ts) for _,p in ipairs(ts) do local _,_,r=getCh(p) if r then local e=Instance.new("Explosion") e.Position=r.Position e.BlastRadius=8 e.BlastPressure=500000 e.Parent=Workspace end end end
+local function cmdFling(ts)
+	for _,p in ipairs(ts) do
+		local _,h,r = getCh(p)
+		if h and r then
+			local bv=Instance.new("BodyVelocity") bv.MaxForce=Vector3.new(1e9,1e9,1e9)
+			bv.Velocity=Vector3.new(math.random(-300,300),math.random(500,1200),math.random(-300,300))
+			bv.Parent=r task.delay(0.3,function() bv:Destroy() end)
+		end
+	end
+end
+local function cmdInvisible(ts,visible) for _,p in ipairs(ts) do local c=p.Character if c then for _,d in ipairs(c:GetDescendants()) do if d:IsA("BasePart") then d.Transparency=visible and 0 or 1 end if d:IsA("Decal") then d.Transparency=visible and 0 or 1 end end end end end
+local function cmdNoLimbs(ts) for _,p in ipairs(ts) do local c=p.Character if c then for _,v in ipairs(c:GetChildren()) do if v:IsA("BasePart") then local n=v.Name if n=="Right Leg" or n=="Left Leg" or n=="Right Arm" or n=="Left Arm" or n=="RightUpperLeg" or n=="LeftUpperLeg" or n=="RightUpperArm" or n=="LeftUpperArm" then v:Destroy() end end end end end end
+local function cmdNoHats(ts) for _,p in ipairs(ts) do local c=p.Character if c then for _,v in ipairs(c:GetChildren()) do if v:IsA("Accessory") then v:Destroy() end end end end end
+local function cmdNaked(ts) for _,p in ipairs(ts) do local c=p.Character if c then for _,v in ipairs(c:GetDescendants()) do if v:IsA("Clothing") or v:IsA("ShirtGraphic") then v:Destroy() end end end end end
+local function cmdNoFace(ts) for _,p in ipairs(ts) do local c=p.Character if c then for _,v in ipairs(c:GetDescendants()) do if v:IsA("Decal") and v.Name=="face" then v:Destroy() end end end end end
+local function cmdBlockhead(ts) for _,p in ipairs(ts) do local c=p.Character if c then local h=c:FindFirstChild("Head") if h then for _,m in ipairs(h:GetChildren()) do if m:IsA("SpecialMesh") or m:IsA("DataModelMesh") then m:Destroy() end end end end end end
+local function cmdBring(ts)
+	local _,_,mr = getCh(me) if not mr then return end
+	for _,t in ipairs(ts) do local _,h,r=getCh(t) if r then if h then h.Sit=false end r.CFrame=mr.CFrame+Vector3.new(3,1,0) end end
+end
+local function cmdGoto(ts)
+	local tgt=ts[1] if not tgt then return end
+	local _,_,r=getCh(tgt) local _,_,mr=getCh(me)
+	if r and mr then mr.CFrame=r.CFrame+Vector3.new(3,1,0) end
+end
+local function cmdLoopBring(ts,distance,delayS)
+	distance=tonumber(distance) or 3 delayS=tonumber(delayS) or 0
+	for _,t in ipairs(ts) do
+		if not loopBring[t] then loopBring[t]=true
+			task.spawn(function()
+				while loopBring[t] and t.Parent do
+					local _,_,r=getCh(t) local _,_,mr=getCh(me)
+					if r and mr then r.CFrame=mr.CFrame+Vector3.new(distance,1,0) end
+					task.wait(delayS)
+				end
+			end)
+		end
+	end
+end
+local function cmdUnloopBring(ts) for _,t in ipairs(ts) do loopBring[t]=nil end end
+local function cmdFollow(ts)
+	if followConn then followConn:Disconnect() followConn=nil end
+	local tgt=ts[1] if not tgt then return end
+	followConn = RunService.Heartbeat:Connect(function()
+		local _,h=getCh(me) local _,_,r=getCh(tgt)
+		if h and r then h:MoveTo(r.Position) end
+	end)
+end
+local function cmdUnfollow() if followConn then followConn:Disconnect() followConn=nil end end
+local function cmdSpin(ts,speed)
+	speed=tonumber(speed) or 20
+	for _,t in ipairs(ts) do local _,_,r=getCh(t) if r then
+		for _,v in ipairs(r:GetChildren()) do if v.Name=="AdminSpin" then v:Destroy() end end
+		local b=Instance.new("BodyAngularVelocity") b.Name="AdminSpin" b.MaxTorque=Vector3.new(0,math.huge,0) b.AngularVelocity=Vector3.new(0,speed,0) b.Parent=r
+	end end
+end
+local function cmdUnspin(ts) for _,t in ipairs(ts) do local _,_,r=getCh(t) if r then for _,v in ipairs(r:GetChildren()) do if v.Name=="AdminSpin" then v:Destroy() end end end end end
+local function cmdBtools(ts) for _,p in ipairs(ts) do local bp=p:FindFirstChildOfClass("Backpack") if bp then for i=1,4 do local t=Instance.new("HopperBin") t.BinType=i t.Parent=bp end end end end
+local function cmdTime(v) Lighting.ClockTime=tonumber(v) or 12 end
+local function cmdGravity(v) Workspace.Gravity=tonumber(v) or 196.2 end
+local function cmdAnnounce(msg) local h=Instance.new("Hint") h.Text="[ADMIN] "..(msg or "") h.Parent=Workspace task.delay(5,function() h:Destroy() end) end
+local function cmdGive(ts,n) for _,p in ipairs(ts) do local bp=p:FindFirstChildOfClass("Backpack") if bp and n and n~="" then for _,t in ipairs(ServerStorage:GetChildren()) do if t:IsA("Tool") and string.lower(t.Name)==string.lower(n) then t:Clone().Parent=bp end end end end end
+local function cmdR6(ts) for _,p in ipairs(ts) do local desc=Players:GetHumanoidDescriptionFromUserId(p.UserId) p:LoadCharacter() local c=p.Character or p.CharacterAdded:Wait() local h=c:WaitForChild("Humanoid") pcall(function() h:ApplyDescription(desc) end) end end
+local function cmdSky(id) for _,v in ipairs(Lighting:GetChildren()) do if v:IsA("Sky") then v:Destroy() end end local a="rbxassetid://"..tostring(id) local s=Instance.new("Sky") s.Name="AdminSky" s.SkyboxBk=a s.SkyboxDn=a s.SkyboxFt=a s.SkyboxLf=a s.SkyboxRt=a s.SkyboxUp=a s.Parent=Lighting end
+local function cmdClearDecals() for _,o in ipairs(Workspace:GetDescendants()) do if o:IsA("Decal") and o.Name=="AdminSpamDecal" then o:Destroy() end end end
+local function cmdDecalSpam(id) local tex="rbxassetid://"..tostring(id) task.spawn(function() for _,o in ipairs(Workspace:GetDescendants()) do if o:IsA("BasePart") then for _,f in ipairs({Enum.NormalId.Top,Enum.NormalId.Bottom,Enum.NormalId.Front,Enum.NormalId.Back,Enum.NormalId.Left,Enum.NormalId.Right}) do local d=Instance.new("Decal") d.Name="AdminSpamDecal" d.Face=f d.Texture=tex d.Parent=o end end end end) end
+local function cmdShutdown() for _,p in ipairs(Players:GetPlayers()) do p:Kick("Server shut down.") end end
+local function cmdLockWS() for _,v in ipairs(Workspace:GetDescendants()) do if v:IsA("BasePart") then v.Locked=true end end end
+local function cmdUnlockWS() for _,v in ipairs(Workspace:GetDescendants()) do if v:IsA("BasePart") then v.Locked=false end end end
+local function cmdNoClipWS() for _,v in ipairs(Workspace:GetDescendants()) do if v:IsA("BasePart") and v.CanCollide then v.CanCollide=false end end end
+local function cmdRemoveTerrain() Workspace.Terrain:Clear() end
+local function cmdTools(ts) for _,p in ipairs(ts) do local bp=p:FindFirstChildOfClass("Backpack") if bp then for _,src in ipairs({Lighting,ReplicatedStorage}) do for _,v in ipairs(src:GetDescendants()) do if v:IsA("Tool") or v:IsA("HopperBin") then v:Clone().Parent=bp end end end end end end
+local function cmdNoTools(ts) for _,p in ipairs(ts) do local bp=p:FindFirstChildOfClass("Backpack") if bp then for _,v in ipairs(bp:GetDescendants()) do if v:IsA("Tool") or v:IsA("HopperBin") then v:Destroy() end end end local c=p.Character if c then for _,v in ipairs(c:GetDescendants()) do if v:IsA("Tool") or v:IsA("HopperBin") then v:Destroy() end end end end end
+local function cmdNotify(msg) pcall(function() StarterGui:SetCore("SendNotification",{Title="SimpleAdmin",Text=msg or "",Duration=4}) end) end
+local function cmdTeam(ts,n) local team for _,v in ipairs(Teams:GetChildren()) do if string.lower(v.Name):match(string.lower(n or "")) then team=v break end end if not team then return end for _,p in ipairs(ts) do p.Team=team p.TeamColor=team.TeamColor end end
+local function cmdChat(msg) local h=Instance.new("Message") h.Text=(me.Name or "Admin")..": "..(msg or "") h.Parent=Workspace task.delay(4,function() h:Destroy() end) end
+
+------------------------------------------------------------
+-- fly/noclip clients
+------------------------------------------------------------
+local function ensureFlag(name)
+	local f = me:FindFirstChild(name)
+	if not f then f = Instance.new("BoolValue") f.Name=name f.Parent=me end
+	return f
+end
+
+local flyClientSource = [[
+local Players=game:GetService("Players") local RunService=game:GetService("RunService") local UIS=game:GetService("UserInputService")
+local LocalPlayer=Players.LocalPlayer local SPEED=80 local flying=false local bv,bg,conn
+local function cleanup() flying=false if conn then conn:Disconnect() conn=nil end local c=LocalPlayer.Character if c then local r=c:FindFirstChild("HumanoidRootPart") if r then local a=r:FindFirstChild("AdminFlyVelocity") if a then a:Destroy() end local b=r:FindFirstChild("AdminFlyGyro") if b then b:Destroy() end end local h=c:FindFirstChildOfClass("Humanoid") if h then h.PlatformStand=false end end end
+local function startFlying() local c=LocalPlayer.Character if not c then return end local h=c:FindFirstChildOfClass("Humanoid") local r=c:FindFirstChild("HumanoidRootPart") if not h or not r then return end cleanup() flying=true h.PlatformStand=true
+bv=Instance.new("BodyVelocity") bv.Name="AdminFlyVelocity" bv.MaxForce=Vector3.new(1e9,1e9,1e9) bv.P=1250 bv.Velocity=Vector3.zero bv.Parent=r
+bg=Instance.new("BodyGyro") bg.Name="AdminFlyGyro" bg.MaxTorque=Vector3.new(1e9,1e9,1e9) bg.P=10000 bg.D=500 bg.CFrame=r.CFrame bg.Parent=r
+conn=RunService.RenderStepped:Connect(function() if not flying then return end local cc=LocalPlayer.Character if not cc then return end local hh=cc:FindFirstChildOfClass("Humanoid") local rr=cc:FindFirstChild("HumanoidRootPart") if not hh or not rr or not bv.Parent or not bg.Parent then return end local cam=workspace.CurrentCamera if not cam then return end local look=cam.CFrame.LookVector local flat=Vector3.new(look.X,0,look.Z) if flat.Magnitude>0 then flat=flat.Unit bg.CFrame=CFrame.lookAt(rr.Position,rr.Position+flat) end local dir=Vector3.zero if UIS:IsKeyDown(Enum.KeyCode.W) then dir=dir+cam.CFrame.LookVector end if UIS:IsKeyDown(Enum.KeyCode.S) then dir=dir-cam.CFrame.LookVector end if UIS:IsKeyDown(Enum.KeyCode.D) then dir=dir+cam.CFrame.RightVector end if UIS:IsKeyDown(Enum.KeyCode.A) then dir=dir-cam.CFrame.RightVector end if UIS:IsKeyDown(Enum.KeyCode.Space) then dir=dir+Vector3.new(0,1,0) end if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir=dir-Vector3.new(0,1,0) end if dir.Magnitude>0 then bv.Velocity=dir.Unit*SPEED else bv.Velocity=Vector3.zero end hh.PlatformStand=true end) end
+local function stopFlying() cleanup() end
+local flag=LocalPlayer:WaitForChild("SimpleAdminFlyState")
+if flag.Value then startFlying() end
+flag:GetPropertyChangedSignal("Value"):Connect(function() if flag.Value then startFlying() else stopFlying() end end)
+LocalPlayer.CharacterAdded:Connect(function() task.wait(0.4) if flag.Value then startFlying() end end)
+]]
+
+local noclipSource = [[
+local Players=game:GetService("Players") local RunService=game:GetService("RunService")
+local LocalPlayer=Players.LocalPlayer local flag=LocalPlayer:WaitForChild("SimpleAdminNoclipState") local conn
+local function start() if conn then conn:Disconnect() end conn=RunService.Stepped:Connect(function() if not flag.Value then return end local c=LocalPlayer.Character if not c then return end for _,v in ipairs(c:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide=false end end end) end
+flag:GetPropertyChangedSignal("Value"):Connect(function() if flag.Value then start() elseif conn then conn:Disconnect() conn=nil end end)
+if flag.Value then start() end
+]]
+
+local function installLocal(name, src)
+	local pg = me:FindFirstChildOfClass("PlayerGui") if not pg then return end
+	local ex = pg:FindFirstChild(name) if ex then ex:Destroy() end
+	local ls = Instance.new("LocalScript") ls.Name=name ls.Source=src ls.Parent=pg
+end
+
+local function startFlySelf() ensureFlag("SimpleAdminFlyState").Value=true installLocal("SimpleAdminFlyClient", flyClientSource) end
+local function stopFlySelf() ensureFlag("SimpleAdminFlyState").Value=false end
+local function startNoclip() ensureFlag("SimpleAdminNoclipState").Value=true installLocal("SimpleAdminNoclipClient", noclipSource) end
+local function stopNoclip() ensureFlag("SimpleAdminNoclipState").Value=false end
+
+------------------------------------------------------------
+-- Actions registry (morphs, scripts, vehicles)
+------------------------------------------------------------
+local Actions = {
+	-- Morphs (original)
+	WhiteMonster  = function(p) require(75834950186546).MorphMonster(p.Name,"guilt") end,
+	IslandGuy     = function(p) require(74966104620799)(p.Name) end,
+	Goner         = function(p) require(4513235536).G(p.Name) end,
+	Doomguy       = function(p) require(5812973403).Halo(p.Name) end,
+	-- Morphs (new)
+	Gojo          = function(p) require(14499140823)(p.Name,"sorcerer") end,
+	AllSeeingHand = function(_) require(5375399205).Player("") end,
+	IronmanSuit   = function(_) require(5987956703)("WING_BLADE467854") end,
+	Tea           = function(p) require(3543575474).load(p.Name) end,
+	HallowSlayer  = function(p) require(2675506369).hal(p.Name) end,
+	Omega         = function(p) require(6856371401)(p.Name) end,
+	Fists         = function(p) require(15627085040).RAroblox(p.Name) end,
+	Magician      = function(p) require(6015747481).load(p.Name) end,
+	StarGlitcher  = function(p) require(4749896781).no(p.Name) end,
+	ServerAdmin   = function(p) require(4665394711).load(p.Name) end,
+	FryingPan     = function(p) require(2965793312):Fire(p.Name) end,
+	CubeBuster    = function(p) require(4661906279).load(p.Name) end,
+	SoulReaper    = function(p) require(7972086233).CLoad(p.Name) end,
+	Chainsaw      = function(p) require(4560014954).load(p.Name) end,
+
+	-- Scripts
+	Dex           = function(p) require(14572394952)(p.Name) end,
+	ServerRestore = function(_)
+		local code = TeleportService:ReserveServer(game.PlaceId)
+		TeleportService:TeleportToPrivateServer(game.PlaceId, code, Players:GetPlayers())
+	end,
+	Unban         = function(p)
+		local id = Players:GetUserIdFromNameAsync(p.Name)
+		require(84214278325090)["undoban"]({id})
+	end,
+
+	-- Vehicles / Items
+	Helicopter    = function(p) require(12620186035).Huey(p.Name) end,
+	Voltbike      = function(p) require(4021975182).load(p.Name) end,
+	RoadRogue     = function(p) require(7473216460).load(p.Name) end,
+	PinkCar       = function(p) require(4745872847).load(p.Name) end,
+	Bulldozer     = function(p) require(11102724246).load(p.Name) end,
+	WindowsPC     = function(p) require(5083134281)(p.Name) end,
+}
+
+------------------------------------------------------------
+-- GUI
+------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "SimpleAdminGui"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.IgnoreGuiInset = true
+gui.Parent = me.PlayerGui
+
+-- shadow frame
+local shadow = Instance.new("Frame")
+shadow.Size = UDim2.new(0, 620, 0, 490)
+shadow.Position = UDim2.new(0.5, -310, 0.5, -245)
+shadow.BackgroundColor3 = Color3.new(0,0,0)
+shadow.BackgroundTransparency = 0.6
+shadow.BorderSizePixel = 0
+shadow.Parent = gui
+Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 14)
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 600, 0, 470)
+main.Position = UDim2.new(0.5, -300, 0.5, -235)
+main.BackgroundColor3 = C.bg
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+local mStroke = Instance.new("UIStroke", main) mStroke.Color = C.border mStroke.Thickness = 1
+
+-- title bar
+local bar = Instance.new("Frame")
+bar.Size = UDim2.new(1, 0, 0, 44)
+bar.BackgroundColor3 = C.surface
+bar.BorderSizePixel = 0
+bar.Parent = main
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 12)
+-- bottom clip
+local barClip = Instance.new("Frame")
+barClip.Size = UDim2.new(1,0,0,12) barClip.Position = UDim2.new(0,0,1,-12)
+barClip.BackgroundColor3 = C.surface barClip.BorderSizePixel = 0 barClip.Parent = bar
+
+local dot = Instance.new("Frame")
+dot.Size = UDim2.new(0, 10, 0, 10)
+dot.Position = UDim2.new(0, 16, 0.5, -5)
+dot.BackgroundColor3 = C.accent
+dot.BorderSizePixel = 0
+dot.Parent = bar
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+local titleText = Instance.new("TextLabel")
+titleText.BackgroundTransparency = 1
+titleText.Position = UDim2.new(0, 36, 0, 0)
+titleText.Size = UDim2.new(1, -120, 1, 0)
+titleText.Font = Enum.Font.GothamBold
+titleText.TextSize = 15
+titleText.TextColor3 = C.text
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.Text = "SimpleAdmin"
+titleText.Parent = bar
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.new(0, 28, 0, 28)
+close.Position = UDim2.new(1, -36, 0.5, -14)
+close.BackgroundColor3 = C.surface3
+close.Text = "×"
+close.Font = Enum.Font.GothamBold
+close.TextSize = 18
+close.TextColor3 = C.text
+close.BorderSizePixel = 0
+close.AutoButtonColor = true
+close.Parent = bar
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 8)
+
+-- side tab rail
+local side = Instance.new("Frame")
+side.Position = UDim2.new(0, 0, 0, 44)
+side.Size = UDim2.new(0, 140, 1, -44)
+side.BackgroundColor3 = C.surface
+side.BorderSizePixel = 0
+side.Parent = main
+local sideLayout = Instance.new("UIListLayout", side)
+sideLayout.Padding = UDim.new(0, 4)
+local sidePad = Instance.new("UIPadding", side)
+sidePad.PaddingTop = UDim.new(0,8) sidePad.PaddingLeft = UDim.new(0,8) sidePad.PaddingRight = UDim.new(0,8)
+
+-- content area
+local content = Instance.new("Frame")
+content.Position = UDim2.new(0, 148, 0, 52)
+content.Size = UDim2.new(1, -156, 1, -60)
+content.BackgroundTransparency = 1
+content.Parent = main
+
+local pages = {}
+local function setActive(tab)
+	for _,e in ipairs(pages) do
+		e.page.Visible = false
+		e.tab.BackgroundColor3 = C.surface
+		e.label.TextColor3 = C.textDim
+	end
+	tab.page.Visible = true
+	tab.tab.BackgroundColor3 = C.surface3
+	tab.label.TextColor3 = C.text
+end
+
+local function makeTab(tabName)
+	local tab = Instance.new("TextButton")
+	tab.Size = UDim2.new(1, 0, 0, 34)
+	tab.BackgroundColor3 = C.surface
+	tab.AutoButtonColor = false
+	tab.Text = ""
+	tab.BorderSizePixel = 0
+	tab.Parent = side
+	Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 8)
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, -16, 1, 0)
+	label.Position = UDim2.new(0, 12, 0, 0)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 13
+	label.TextColor3 = C.textDim
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Text = tabName
+	label.Parent = tab
+
+	local page = Instance.new("ScrollingFrame")
+	page.Size = UDim2.new(1, 0, 1, 0)
+	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.ScrollBarThickness = 4
+	page.ScrollBarImageColor3 = C.border
+	page.CanvasSize = UDim2.new(0,0,0,0)
+	page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	page.Visible = false
+	page.Parent = content
+	local layout = Instance.new("UIListLayout", page)
+	layout.Padding = UDim.new(0, 6)
+
+	local entry = {tab=tab, label=label, page=page}
+	tab.MouseButton1Click:Connect(function() setActive(entry) end)
+	tab.MouseEnter:Connect(function() if not page.Visible then tab.BackgroundColor3 = C.surface2 end end)
+	tab.MouseLeave:Connect(function() if not page.Visible then tab.BackgroundColor3 = C.surface end end)
+	table.insert(pages, entry)
+	return page, entry
+end
+
+local function styleButton(b, accent)
+	b.BackgroundColor3 = accent and C.accent2 or C.surface2
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = true
+	b.Font = Enum.Font.Gotham
+	b.TextSize = 13
+	b.TextColor3 = C.text
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	local s = Instance.new("UIStroke", b) s.Color = C.border s.Thickness = 1 s.Transparency = 0.4
+end
+
+local function makeActionButton(parent, label, actionName)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, 0, 0, 34)
+	b.Text = label b.Parent = parent
+	styleButton(b)
+	b.MouseButton1Click:Connect(function()
+		local fn = Actions[actionName] if not fn then warn("Unknown action "..actionName) return end
+		task.spawn(function()
+			local ok,err = pcall(fn, me)
+			if not ok then warn("[SimpleAdmin] '"..actionName.."' failed:",err)
+			else print("[SimpleAdmin] '"..actionName.."' ran OK") end
+		end)
+	end)
+end
+
+local function prompt(titleText, placeholder, callback)
+	local dim = Instance.new("Frame")
+	dim.Size = UDim2.new(1,0,1,0) dim.BackgroundColor3 = Color3.new(0,0,0)
+	dim.BackgroundTransparency = 0.5 dim.BorderSizePixel = 0 dim.ZIndex = 50 dim.Parent = gui
+
+	local box = Instance.new("Frame")
+	box.Size = UDim2.new(0, 380, 0, 170) box.Position = UDim2.new(0.5,-190,0.5,-85)
+	box.BackgroundColor3 = C.surface box.BorderSizePixel = 0 box.ZIndex = 51 box.Parent = dim
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 12)
+	local bs = Instance.new("UIStroke", box) bs.Color = C.border bs.Thickness = 1
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1,-24,0,30) lbl.Position = UDim2.new(0,12,0,12)
+	lbl.BackgroundTransparency = 1 lbl.Text = titleText
+	lbl.Font = Enum.Font.GothamBold lbl.TextSize = 14 lbl.TextColor3 = C.text
+	lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.ZIndex = 52 lbl.Parent = box
+
+	local tb = Instance.new("TextBox")
+	tb.Size = UDim2.new(1,-24,0,36) tb.Position = UDim2.new(0,12,0,52)
+	tb.BackgroundColor3 = C.surface2 tb.BorderSizePixel = 0
+	tb.PlaceholderText = placeholder or "" tb.Text = "" tb.ClearTextOnFocus = false
+	tb.Font = Enum.Font.Gotham tb.TextSize = 13 tb.TextColor3 = C.text
+	tb.PlaceholderColor3 = C.textDim tb.ZIndex = 52 tb.Parent = box
+	Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 8)
+	local ts = Instance.new("UIStroke", tb) ts.Color = C.border ts.Thickness = 1
+
+	local ok = Instance.new("TextButton")
+	ok.Size = UDim2.new(0,150,0,34) ok.Position = UDim2.new(1,-162,1,-46)
+	ok.Text = "Run" ok.Font = Enum.Font.GothamBold ok.TextSize = 13 ok.TextColor3 = Color3.new(1,1,1)
+	ok.BackgroundColor3 = C.accent2 ok.BorderSizePixel = 0 ok.ZIndex = 52 ok.Parent = box
+	Instance.new("UICorner", ok).CornerRadius = UDim.new(0, 8)
+
+	local cancel = Instance.new("TextButton")
+	cancel.Size = UDim2.new(0,96,0,34) cancel.Position = UDim2.new(0,12,1,-46)
+	cancel.Text = "Cancel" cancel.Font = Enum.Font.Gotham cancel.TextSize = 13 cancel.TextColor3 = C.text
+	cancel.BackgroundColor3 = C.surface2 cancel.BorderSizePixel = 0 cancel.ZIndex = 52 cancel.Parent = box
+	Instance.new("UICorner", cancel).CornerRadius = UDim.new(0, 8)
+
+	tb:CaptureFocus()
+	local function finish(run)
+		local val = tb.Text
+		dim:Destroy()
+		if run then task.spawn(function() local okr,err=pcall(callback,val) if not okr then warn("[SimpleAdmin] cmd failed:",err) end end) end
+	end
+	ok.MouseButton1Click:Connect(function() finish(true) end)
+	cancel.MouseButton1Click:Connect(function() finish(false) end)
+	tb.FocusLost:Connect(function(e) if e then finish(true) end end)
+end
+
+local function promptNamedTarget()
+	prompt("Enter target name(s) (comma-separated)", "e.g. Ben,Alice", function(val)
+		namedTargetText = val or ""
+		selectedTargetMode = "named"
+	end)
+end
+
+-- tabs
+local morphsPage = makeTab("Morphs")
+local vehiclesPage = makeTab("Vehicles")
+local scriptsPage = makeTab("Scripts")
+local cmdPage = makeTab("Commands")
+local morePage = makeTab("More")
+
+-- Morphs
+makeActionButton(morphsPage, "White Monster (Guilt)", "WhiteMonster")
+makeActionButton(morphsPage, "Island Guy", "IslandGuy")
+makeActionButton(morphsPage, "Goner", "Goner")
+makeActionButton(morphsPage, "Doomguy", "Doomguy")
+makeActionButton(morphsPage, "Gojo (Sorcerer)", "Gojo")
+makeActionButton(morphsPage, "All-Seeing Hand", "AllSeeingHand")
+makeActionButton(morphsPage, "Ironman Suitcase", "IronmanSuit")
+makeActionButton(morphsPage, "Tea", "Tea")
+makeActionButton(morphsPage, "Hallow Slayer", "HallowSlayer")
+makeActionButton(morphsPage, "Omega", "Omega")
+makeActionButton(morphsPage, "Fists", "Fists")
+makeActionButton(morphsPage, "Magician", "Magician")
+makeActionButton(morphsPage, "Star Glitcher", "StarGlitcher")
+makeActionButton(morphsPage, "Server Admin", "ServerAdmin")
+makeActionButton(morphsPage, "Frying Pan", "FryingPan")
+makeActionButton(morphsPage, "Cube Buster", "CubeBuster")
+makeActionButton(morphsPage, "Soul Reaper", "SoulReaper")
+makeActionButton(morphsPage, "Chainsaw", "Chainsaw")
+
+-- Vehicles
+makeActionButton(vehiclesPage, "Helicopter (Huey)", "Helicopter")
+makeActionButton(vehiclesPage, "Voltbike", "Voltbike")
+makeActionButton(vehiclesPage, "Road Rogue Motorbike", "RoadRogue")
+makeActionButton(vehiclesPage, "Pink Car", "PinkCar")
+makeActionButton(vehiclesPage, "Bulldozer", "Bulldozer")
+makeActionButton(vehiclesPage, "Windows PC", "WindowsPC")
+
+-- Scripts
+makeActionButton(scriptsPage, "Serverside Dex", "Dex")
+makeActionButton(scriptsPage, "Server Restore", "ServerRestore")
+makeActionButton(scriptsPage, "Unban Self", "Unban")
+
+-- Commands — target selector
+local targetLabel = Instance.new("TextLabel")
+targetLabel.Size = UDim2.new(1, 0, 0, 20)
+targetLabel.BackgroundTransparency = 1
+targetLabel.Text = "Target: me"
+targetLabel.Font = Enum.Font.GothamBold targetLabel.TextSize = 13
+targetLabel.TextXAlignment = Enum.TextXAlignment.Left
+targetLabel.TextColor3 = C.text
+targetLabel.Parent = cmdPage
+
+local trRow = Instance.new("Frame")
+trRow.Size = UDim2.new(1, 0, 0, 32)
+trRow.BackgroundTransparency = 1
+trRow.Parent = cmdPage
+local trLayout = Instance.new("UIListLayout", trRow)
+trLayout.FillDirection = Enum.FillDirection.Horizontal
+trLayout.Padding = UDim.new(0, 6)
+
+local function refreshTarget()
+	if selectedTargetMode == "named" then targetLabel.Text = "Target: named ("..namedTargetText..")"
+	else targetLabel.Text = "Target: "..selectedTargetMode end
+end
+local function makeTargetBtn(label, mode)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 80, 1, 0)
+	b.Text = label b.Parent = trRow
+	styleButton(b)
+	b.MouseButton1Click:Connect(function()
+		if mode == "named" then promptNamedTarget() task.wait() refreshTarget()
+		else selectedTargetMode = mode refreshTarget() end
+	end)
+end
+makeTargetBtn("Me","me") makeTargetBtn("All","all") makeTargetBtn("Others","others") makeTargetBtn("Random","random") makeTargetBtn("Named…","named")
+
+local function rowAdder(parent)
+	local cur, left = nil, 0
+	return function(label, fn)
+		if left == 0 then
+			cur = Instance.new("Frame")
+			cur.Size = UDim2.new(1, 0, 0, 34)
+			cur.BackgroundTransparency = 1
+			cur.Parent = parent
+			local l = Instance.new("UIListLayout", cur)
+			l.FillDirection = Enum.FillDirection.Horizontal
+			l.Padding = UDim.new(0, 6)
+			left = 2
+		end
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(0.5, -3, 1, 0)
+		b.Text = label b.Parent = cur
+		styleButton(b)
+		b.MouseButton1Click:Connect(function()
+			task.spawn(function()
+				local ok, err = pcall(fn)
+				if not ok then warn("[SimpleAdmin] cmd failed:", err) end
+			end)
+		end)
+		left = left - 1
+	end
+end
+
+local addCmd = rowAdder(cmdPage)
+local addMore = rowAdder(morePage)
+
+addCmd("Bring", function() cmdBring(resolveTargets()) end)
+addCmd("Goto", function() cmdGoto(resolveTargets()) end)
+addCmd("Loop Bring", function() cmdLoopBring(resolveTargets(),3,0) end)
+addCmd("Unloop Bring", function() cmdUnloopBring(resolveTargets()) end)
+addCmd("Follow", function() cmdFollow(resolveTargets()) end)
+addCmd("Unfollow", function() cmdUnfollow() end)
+addCmd("Respawn", function() cmdRespawn(resolveTargets()) end)
+addCmd("Refresh", function() cmdRefresh(resolveTargets()) end)
+addCmd("Kill", function() cmdKill(resolveTargets()) end)
+addCmd("Freeze", function() cmdFreeze(resolveTargets()) end)
+addCmd("Thaw", function() cmdThaw(resolveTargets()) end)
+addCmd("Anchor", function() cmdAnchor(resolveTargets()) end)
+addCmd("Unanchor", function() cmdUnanchor(resolveTargets()) end)
+addCmd("God", function() cmdGod(resolveTargets()) end)
+addCmd("Ungod", function() cmdUngod(resolveTargets()) end)
+addCmd("Explode", function() cmdExplode(resolveTargets()) end)
+addCmd("Fling", function() cmdFling(resolveTargets()) end)
+addCmd("Sit", function() cmdSit(resolveTargets()) end)
+addCmd("Jump", function() cmdJumpCmd(resolveTargets()) end)
+addCmd("Stun", function() cmdStun(resolveTargets()) end)
+addCmd("Unstun", function() cmdUnstun(resolveTargets()) end)
+addCmd("Invisible", function() cmdInvisible(resolveTargets(),false) end)
+addCmd("Visible", function() cmdInvisible(resolveTargets(),true) end)
+addCmd("Fly (me)", function() startFlySelf() end)
+addCmd("Unfly (me)", function() stopFlySelf() end)
+addCmd("Noclip (me)", function() startNoclip() end)
+addCmd("Clip (me)", function() stopNoclip() end)
+addCmd("R6", function() cmdR6(resolveTargets()) end)
+addCmd("Btools", function() cmdBtools(resolveTargets()) end)
+addCmd("Tools (copy)", function() cmdTools(resolveTargets()) end)
+addCmd("No Tools", function() cmdNoTools(resolveTargets()) end)
+addCmd("Kick (reason)", function() prompt("Kick reason","Reason",function(v) cmdKick(resolveTargets(),v) end) end)
+addCmd("Set Speed", function() prompt("WalkSpeed","16",function(v) cmdSpeed(resolveTargets(),v) end) end)
+addCmd("Set JumpPower", function() prompt("JumpPower","50",function(v) cmdJump(resolveTargets(),v) end) end)
+addCmd("Set Health", function() prompt("Health","100",function(v) cmdHealth(resolveTargets(),v) end) end)
+addCmd("HipHeight", function() prompt("HipHeight","2",function(v) cmdHipHeight(resolveTargets(),v) end) end)
+addCmd("Spin", function() prompt("Speed","20",function(v) cmdSpin(resolveTargets(),v) end) end)
+addCmd("Unspin", function() cmdUnspin(resolveTargets()) end)
+addCmd("Give Tool", function() prompt("Tool name","Sword",function(v) cmdGive(resolveTargets(),v) end) end)
+addCmd("Team", function() prompt("Team","Red",function(v) cmdTeam(resolveTargets(),v) end) end)
+addCmd("LoopBring+", function() prompt("distance,delay","3,0.1",function(v) local p=string.split(v,",") cmdLoopBring(resolveTargets(),p[1],p[2]) end) end)
+
+addMore("No Limbs", function() cmdNoLimbs(resolveTargets()) end)
+addMore("No Hats", function() cmdNoHats(resolveTargets()) end)
+addMore("Naked", function() cmdNaked(resolveTargets()) end)
+addMore("No Face", function() cmdNoFace(resolveTargets()) end)
+addMore("Blockhead", function() cmdBlockhead(resolveTargets()) end)
+addMore("Set Time", function() prompt("Clock 0-24","12",function(v) cmdTime(v) end) end)
+addMore("Set Gravity", function() prompt("Gravity","196.2",function(v) cmdGravity(v) end) end)
+addMore("Announce", function() prompt("Announcement","Hello!",function(v) cmdAnnounce(v) end) end)
+addMore("Chat (Message)", function() prompt("Message","Hi",function(v) cmdChat(v) end) end)
+addMore("Notify", function() prompt("Notification","text",function(v) cmdNotify(v) end) end)
+addMore("Sky (id)", function() prompt("Sky asset ID","123456",function(v) cmdSky(v) end) end)
+addMore("DecalSpam (id)", function() prompt("Decal asset ID","123456",function(v) cmdDecalSpam(v) end) end)
+addMore("Clear Decals", function() cmdClearDecals() end)
+addMore("Lock WS", function() cmdLockWS() end)
+addMore("Unlock WS", function() cmdUnlockWS() end)
+addMore("Noclip WS", function() cmdNoClipWS() end)
+addMore("Remove Terrain", function() cmdRemoveTerrain() end)
+addMore("Shutdown", function() prompt("Type YES","YES",function(v) if v=="YES" then cmdShutdown() end end) end)
+
+-- default
+setActive(pages[1])
+
+close.MouseButton1Click:Connect(function() main.Visible = not main.Visible shadow.Visible = main.Visible end)
+
+-- === PATCH v3: bottom-left pill, no X, real keybind via RemoteEvent ===
+
+-- Nuke stray shadow frames in ScreenGui
+for _,c in ipairs(gui:GetChildren()) do
+	if c:IsA("Frame") and c.Name ~= "Main" then c:Destroy() end
+end
+
+-- Shadow inside Main (so it hides with it)
+if not main:FindFirstChild("Shadow") then
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
+	shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+	shadow.Position = UDim2.new(0.5, 0, 0.5, 3)
+	shadow.Size = UDim2.new(1, 20, 1, 20)
+	shadow.BackgroundColor3 = Color3.new(0,0,0)
+	shadow.BackgroundTransparency = 0.7
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = 0
+	shadow.Parent = main
+	Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 16)
+end
+
+-- Remove the X close button
+if close and close.Parent then close:Destroy() end
+
+-- Remove any previous pill
+local oldPill = gui:FindFirstChild("ToggleBtn") if oldPill then oldPill:Destroy() end
+
+-- Pill in BOTTOM-LEFT
+local pill = Instance.new("TextButton")
+pill.Name = "ToggleBtn"
+pill.AnchorPoint = Vector2.new(0, 1)
+pill.Position = UDim2.new(0, 12, 1, -12)
+pill.Size = UDim2.new(0, 130, 0, 34)
+pill.BackgroundColor3 = C.accent2
+pill.TextColor3 = Color3.new(1,1,1)
+pill.Font = Enum.Font.GothamBold
+pill.TextSize = 13
+pill.Text = "SimpleAdmin"
+pill.BorderSizePixel = 0
+pill.AutoButtonColor = true
+pill.Parent = gui
+Instance.new("UICorner", pill).CornerRadius = UDim.new(0, 10)
+local ps = Instance.new("UIStroke", pill) ps.Color = C.border ps.Thickness = 1
+
+pill.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
+
+-- === Real keybind via RemoteEvent ===
+local remote = ReplicatedStorage:FindFirstChild("SimpleAdminToggle")
+if remote then remote:Destroy() end
+remote = Instance.new("RemoteEvent")
+remote.Name = "SimpleAdminToggle"
+remote.Parent = ReplicatedStorage
+
+remote.OnServerEvent:Connect(function(plr)
+	if plr == me then main.Visible = not main.Visible end
+end)
+
+-- Client stub that fires the remote on F4 / RightCtrl
+local oldKb = me.PlayerGui:FindFirstChild("SimpleAdminKeybind") if oldKb then oldKb:Destroy() end
+local oldKb2 = gui:FindFirstChild("SimpleAdminKeybind") if oldKb2 then oldKb2:Destroy() end
+
+local kb = Instance.new("LocalScript")
+kb.Name = "SimpleAdminKeybind"
+pcall(function() kb.RunContext = Enum.RunContext.Client end)
+kb.Source = [[
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+local remote = RS:WaitForChild("SimpleAdminToggle", 5)
+if not remote then return end
+UIS.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == Enum.KeyCode.F4 or input.KeyCode == Enum.KeyCode.RightControl then
+		remote:FireServer()
+	end
+end)
+print("[SimpleAdmin] keybind ready (Pill Bottom Left)")
+]]
+kb.Parent = gui
+
+print("[SimpleAdmin] patch v3 applied — bottom-left pill, keybind F4/RightCtrl")
